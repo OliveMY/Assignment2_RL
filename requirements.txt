@@ -1,0 +1,7 @@
+mlagents-envs==0.28.0
+stable-baselines3[extra]>=2.3.0
+gymnasium
+tensorboard
+numpy
+mss
+imageio[ffmpeg]
