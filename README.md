@@ -71,16 +71,21 @@ Checkpoints are saved to `models/{env}/` every 10K steps (50K for hard). Trainin
 
 All environments use PPO with MlpPolicy. See `src/config.py` for the full configuration.
 
-## Evaluation
+## Evaluation & Visualization
+
+Given a checkpoint path and environment name, you can evaluate performance or watch the agent play live:
 
 ```bash
-# Fast evaluation (no graphics, accelerated)
+# Fast evaluation (no graphics, accelerated) — prints win rate and stats
 python src/evaluate.py --env simple --model models/simple/final.zip --rounds 100
 
-# Live demo (graphics, real-time)
+# Live demo (graphics, real-time) — opens Unity window to watch the agent play
 python src/evaluate.py --env simple --model models/simple/final.zip --rounds 10 --demo
 
-# Evaluate all environments
+# Evaluate from a specific checkpoint
+python src/evaluate.py --env hard --model models/hard/checkpoint_550000_steps.zip --rounds 50
+
+# Evaluate all environments (uses models/{env}/final.zip by default)
 python src/evaluate.py --env all --rounds 10
 ```
 
@@ -89,17 +94,17 @@ python src/evaluate.py --env all --rounds 10
 Record gameplay from a checkpoint as MP4 video files:
 
 ```bash
-# Record 3 episodes (defaults to models/{env}/final.zip)
-python src/record.py --env simple --rounds 3
+# Record 3 episodes from the final model
+python src/record.py --env simple --model models/simple/final.zip --rounds 3
 
 # Record from a specific checkpoint
 python src/record.py --env hard --model models/hard/checkpoint_550000_steps.zip --rounds 5
 
 # Use a different worker ID if training is running concurrently
-python src/record.py --env simple --rounds 3 --worker-id 1
+python src/record.py --env simple --model models/simple/final.zip --rounds 3 --worker-id 1
 
 # Capture a specific screen region
-python src/record.py --env simple --rounds 2 --region "100,100,800,600"
+python src/record.py --env simple --model models/simple/final.zip --rounds 2 --region "100,100,800,600"
 ```
 
 Videos are saved to `recordings/{env}/`. The Unity game window should be visible on screen during recording (maximize it for best results). macOS requires Screen Recording permission for your terminal app.
