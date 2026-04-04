@@ -8,6 +8,7 @@ Provides:
 import json
 import os
 import time
+import tempfile
 import numpy as np
 from stable_baselines3.common.callbacks import BaseCallback
 
@@ -133,6 +134,125 @@ class TrainingLogCallback(BaseCallback):
                 "lengths": self.episode_lengths,
                 "outcomes": self.episode_outcomes,
             }, f)
+
+
+class EvalCallback(BaseCallback):
+    """Periodically evaluate the model by playing games in a separate environment.
+
+    Every eval_freq timesteps, saves the current model, loads it in a fresh
+    environment, and plays n_eval_episodes games to measure win rate.
+    Results are logged to TensorBoard and saved as JSON.
+    """
+
+    def __init__(
+        self,
+        env_name: str,
+        eval_freq: int = 50_000,
+        n_eval_episodes: int = 50,
+        log_dir: str = ".",
+        worker_id: int = 100,
+        verbose: int = 1,
+    ):
+        super().__init__(verbose)
+        self.env_name = env_name
+        self.eval_freq = eval_freq
+        self.n_eval_episodes = n_eval_episodes
+        self.log_dir = log_dir
+        self.worker_id = worker_id
+        self._last_eval_step = 0
+
+    def _on_step(self):
+        if self.num_timesteps - self._last_eval_step < self.eval_freq:
+            return True
+        self._last_eval_step = self.num_timesteps
+        self._run_eval()
+        return True
+
+    def _run_eval(self):
+        import tempfile
+        from stable_baselines3 import PPO
+        from env_wrapper import make_env
+
+        if self.verbose:
+            print(f"\n[Eval] Running {self.n_eval_episodes}-game evaluation "
+                  f"at step {self.num_timesteps:,}...")
+
+        # Save current model to a temp file
+        tmp_path = os.path.join(self.log_dir, "_eval_tmp_model")
+        self.model.save(tmp_path)
+
+        # Create a separate eval environment
+        env = make_env(
+            env_name=self.env_name,
+            time_scale=20.0,
+            no_graphics=True,
+            worker_id=self.worker_id,
+        )
+
+        eval_model = PPO.load(tmp_path)
+
+        wins, losses, draws = 0, 0, 0
+        rewards = []
+
+        try:
+            for _ in range(self.n_eval_episodes):
+                obs, info = env.reset()
+                done = False
+                episode_reward = 0.0
+
+                while not done:
+                    action, _ = eval_model.predict(obs, deterministic=True)
+                    obs, reward, terminated, truncated, info = env.step(action)
+                    episode_reward += reward
+                    done = terminated or truncated
+
+                rewards.append(episode_reward)
+                if episode_reward > 0:
+                    wins += 1
+                elif episode_reward < 0:
+                    losses += 1
+                else:
+                    draws += 1
+        finally:
+            env.close()
+            # Clean up temp model file
+            tmp_file = tmp_path + ".zip"
+            if os.path.exists(tmp_file):
+                os.remove(tmp_file)
+
+        win_rate = wins / self.n_eval_episodes
+        avg_reward = float(np.mean(rewards))
+
+        # Log to TensorBoard
+        self.logger.record("eval/win_rate", win_rate)
+        self.logger.record("eval/avg_reward", avg_reward)
+        self.logger.record("eval/wins", wins)
+        self.logger.record("eval/losses", losses)
+        self.logger.record("eval/draws", draws)
+
+        # Save JSON
+        results = {
+            "step": self.num_timesteps,
+            "env_name": self.env_name,
+            "n_episodes": self.n_eval_episodes,
+            "wins": wins,
+            "losses": losses,
+            "draws": draws,
+            "win_rate": win_rate,
+            "avg_reward": avg_reward,
+        }
+        results_path = os.path.join(
+            self.log_dir, f"eval_step_{self.num_timesteps}.json"
+        )
+        with open(results_path, "w") as f:
+            json.dump(results, f, indent=2)
+
+        if self.verbose:
+            print(f"[Eval] Step {self.num_timesteps:,}: "
+                  f"Win rate {100*win_rate:.1f}% "
+                  f"({wins}W/{losses}L/{draws}D), "
+                  f"Avg reward {avg_reward:+.3f}")
+            print(f"[Eval] Results saved to {results_path}")
 
 
 class WinRateStoppingCallback(BaseCallback):

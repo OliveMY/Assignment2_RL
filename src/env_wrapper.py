@@ -13,11 +13,20 @@ import os
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-ENV_PATHS = {
-    "simple": os.path.join(BASE_DIR, "Games", "Simple.app"),
-    "medium": os.path.join(BASE_DIR, "Games", "Medium.app"),
-    "hard": os.path.join(BASE_DIR, "Games", "Hard.app"),
-}
+import platform
+
+if platform.system() == "Darwin":
+    ENV_PATHS = {
+        "simple": os.path.join(BASE_DIR, "Games", "Simple.app"),
+        "medium": os.path.join(BASE_DIR, "Games", "Medium.app"),
+        "hard": os.path.join(BASE_DIR, "Games", "Hard.app"),
+    }
+else:
+    ENV_PATHS = {
+        "simple": os.path.join(BASE_DIR, "Games", "Simple_Linux.x86_64"),
+        "medium": os.path.join(BASE_DIR, "Games", "Medium_Linux.x86_64"),
+        "hard": os.path.join(BASE_DIR, "Games", "Hard_Linux.x86_64"),
+    }
 
 
 class UnityGymnasiumWrapper(gym.Env):

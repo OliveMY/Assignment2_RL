@@ -5,7 +5,7 @@ os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from env_wrapper import make_env
 from config import get_config, get_ppo_kwargs
-from callbacks import TrainingLogCallback, WinRateStoppingCallback
+from callbacks import TrainingLogCallback, WinRateStoppingCallback, EvalCallback
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
@@ -26,7 +26,9 @@ model = PPO('MlpPolicy', env, verbose=0, tensorboard_log=log_dir, **ppo_kwargs)
 callbacks = [
     CheckpointCallback(save_freq=50_000, save_path=model_dir, name_prefix='checkpoint'),
     TrainingLogCallback(log_dir=log_dir, config=config, env_name=env_name, print_freq=200),
-    WinRateStoppingCallback(win_rate_threshold=0.90, min_episodes=300),
+    EvalCallback(env_name=env_name, eval_freq=50_000, n_eval_episodes=50,
+                 log_dir=log_dir, worker_id=100),
+    WinRateStoppingCallback(win_rate_threshold=1.00, min_episodes=300),
 ]
 
 print(f'Training {env_name} for {total_timesteps:,} steps...', flush=True)

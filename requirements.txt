@@ -1,4 +1,5 @@
 mlagents-envs==0.28.0
+protobuf>=3.20,<4
 stable-baselines3[extra]>=2.3.0
 gymnasium
 tensorboard

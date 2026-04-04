@@ -19,7 +19,7 @@ from stable_baselines3.common.monitor import Monitor
 
 from config import get_config, get_ppo_kwargs
 from env_wrapper import make_env, make_vec_env
-from callbacks import TrainingLogCallback, WinRateStoppingCallback
+from callbacks import TrainingLogCallback, WinRateStoppingCallback, EvalCallback
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -38,6 +38,7 @@ def train(args):
     total_timesteps = config.pop("total_timesteps")
     time_scale = config.pop("time_scale", 20.0)
     no_graphics = config.pop("no_graphics", True)
+    config["total_timesteps"] = total_timesteps  # keep for callback logging
 
     model_dir = os.path.join(BASE_DIR, "models", args.env)
     log_dir = os.path.join(BASE_DIR, "results", args.env)
@@ -108,6 +109,14 @@ def train(args):
             print_freq=50,
         ),
     ]
+    if not args.skip_eval:
+        callbacks.append(EvalCallback(
+            env_name=args.env,
+            eval_freq=args.eval_freq,
+            n_eval_episodes=args.eval_episodes,
+            log_dir=log_dir,
+            worker_id=args.worker_id + 100,
+        ))
     if not args.no_early_stop:
         callbacks.append(WinRateStoppingCallback(
             win_rate_threshold=0.92,
@@ -150,6 +159,12 @@ def main():
                         help="Number of parallel Unity environments (default: 1)")
     parser.add_argument("--no-early-stop", action="store_true",
                         help="Disable early stopping on win rate")
+    parser.add_argument("--eval-freq", type=int, default=50_000,
+                        help="Evaluate every N timesteps (default: 50000)")
+    parser.add_argument("--eval-episodes", type=int, default=50,
+                        help="Number of games per evaluation (default: 50)")
+    parser.add_argument("--skip-eval", action="store_true",
+                        help="Disable periodic evaluation")
     args = parser.parse_args()
     train(args)
 
