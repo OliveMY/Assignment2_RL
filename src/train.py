@@ -18,7 +18,7 @@ from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
 
 from config import get_config, get_ppo_kwargs
-from env_wrapper import make_env
+from env_wrapper import make_env, make_vec_env
 from callbacks import TrainingLogCallback, WinRateStoppingCallback
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -45,14 +45,25 @@ def train(args):
     os.makedirs(log_dir, exist_ok=True)
 
     # Create environment
-    print(f"Creating {args.env} environment (time_scale={time_scale})...")
-    env = make_env(
-        env_name=args.env,
-        time_scale=time_scale,
-        no_graphics=no_graphics,
-        worker_id=args.worker_id,
-    )
-    env = Monitor(env)
+    n_envs = args.n_envs
+    if n_envs > 1:
+        print(f"Creating {n_envs} parallel {args.env} environments (time_scale={time_scale})...")
+        env = make_vec_env(
+            env_name=args.env,
+            n_envs=n_envs,
+            time_scale=time_scale,
+            no_graphics=no_graphics,
+            base_worker_id=args.worker_id,
+        )
+    else:
+        print(f"Creating {args.env} environment (time_scale={time_scale})...")
+        env = make_env(
+            env_name=args.env,
+            time_scale=time_scale,
+            no_graphics=no_graphics,
+            worker_id=args.worker_id,
+        )
+        env = Monitor(env)
 
     # Create or load model
     ppo_kwargs = get_ppo_kwargs(config)
@@ -135,6 +146,8 @@ def main():
                         help="Path to checkpoint to resume from")
     parser.add_argument("--worker-id", type=int, default=0,
                         help="Unity worker ID (use different IDs for parallel training)")
+    parser.add_argument("--n-envs", type=int, default=1,
+                        help="Number of parallel Unity environments (default: 1)")
     parser.add_argument("--no-early-stop", action="store_true",
                         help="Disable early stopping on win rate")
     args = parser.parse_args()

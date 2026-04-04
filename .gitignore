@@ -14,9 +14,7 @@ env/
 # Training artifacts
 results/
 runs/
-models/*.onnx
-models/*.pt
-!models/.gitkeep
+models/
 
 # Unity
 Games/
@@ -33,3 +31,9 @@ Thumbs.db
 # Logs
 *.log
 wandb/
+
+# Recordings
+recordings/
+
+# Ref docs
+Ref_doc/

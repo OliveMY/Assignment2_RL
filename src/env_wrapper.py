@@ -192,3 +192,27 @@ def make_env(env_name: str, time_scale: float = 20.0, no_graphics: bool = True,
         no_graphics=no_graphics,
         worker_id=worker_id,
     )
+
+
+def make_vec_env(env_name: str, n_envs: int = 4, time_scale: float = 20.0,
+                 no_graphics: bool = True, base_worker_id: int = 0):
+    """Create a SubprocVecEnv with n_envs parallel Unity environments.
+
+    Each sub-environment gets a unique worker_id (base_worker_id + i)
+    so they bind to different gRPC ports.
+    """
+    from stable_baselines3.common.vec_env import SubprocVecEnv
+
+    def _make_env_fn(wid):
+        def _init():
+            env = UnityGymnasiumWrapper(
+                env_name=env_name,
+                time_scale=time_scale,
+                no_graphics=no_graphics,
+                worker_id=wid,
+            )
+            return env
+        return _init
+
+    env_fns = [_make_env_fn(base_worker_id + i) for i in range(n_envs)]
+    return SubprocVecEnv(env_fns)
