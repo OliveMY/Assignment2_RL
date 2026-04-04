@@ -63,7 +63,7 @@ Checkpoints are saved to `models/{env}/` every 10K steps (50K for hard). Trainin
 
 | Parameter | Simple | Medium | Hard |
 |-----------|--------|--------|------|
-| Total timesteps | 500K | 1M | 2M |
+| Total timesteps | 500K | 2M | 4M |
 | Entropy coef | 0.01 | 0.015 | 0.02 |
 | Network | [128, 128] | [128, 128] | [128, 128] |
 | Learning rate | 3e-4 | 3e-4 | 3e-4 |

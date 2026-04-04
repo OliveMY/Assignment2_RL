@@ -12,7 +12,7 @@ from stable_baselines3.common.monitor import Monitor
 
 env_name = 'hard'
 config = get_config(env_name)
-total_timesteps = 2_000_000
+total_timesteps = 4_000_000
 
 model_dir = f'models/{env_name}'
 log_dir = f'results/{env_name}'
