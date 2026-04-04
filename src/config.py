@@ -50,18 +50,18 @@ BASE_CONFIG = {
 # Per-environment configs (override base)
 ENV_CONFIGS = {
     "simple": {
-        "total_timesteps": 500_000,
+        "total_timesteps": 1_000_000,
         # Simple opponent: likely predictable pattern
         # Standard params should suffice
     },
     "medium": {
-        "total_timesteps": 1_000_000,
+        "total_timesteps": 2_000_000,
         # Medium opponent: more varied behavior
         # Slightly more exploration might help
         "ent_coef": 0.015,
     },
     "hard": {
-        "total_timesteps": 2_000_000,
+        "total_timesteps": 4_000_000,
         # Hard opponent: complex/adaptive behavior
         # More exploration + longer training
         "ent_coef": 0.02,
