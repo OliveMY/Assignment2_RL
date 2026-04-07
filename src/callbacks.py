@@ -41,7 +41,7 @@ class TrainingLogCallback(BaseCallback):
 
         self.episode_rewards = []
         self.episode_lengths = []
-        self.episode_outcomes = []  # 1=win, 0=loss/draw
+        self.episode_outcomes = []  # 1=win, 0=loss, 0.5=draw
         self.start_time = None
         self._episode_count = 0
 
@@ -75,7 +75,13 @@ class TrainingLogCallback(BaseCallback):
                 ep_length = info["episode"]["l"]
                 self.episode_rewards.append(ep_reward)
                 self.episode_lengths.append(ep_length)
-                self.episode_outcomes.append(1 if ep_reward > 0 else 0)
+                if ep_reward > 0:
+                    outcome = 1    # win
+                elif ep_reward < 0:
+                    outcome = 0    # loss
+                else:
+                    outcome = 0.5  # draw
+                self.episode_outcomes.append(outcome)
                 self._episode_count += 1
 
                 # Log to TensorBoard
@@ -181,13 +187,27 @@ class EvalCallback(BaseCallback):
         tmp_path = os.path.join(self.log_dir, "_eval_tmp_model")
         self.model.save(tmp_path)
 
-        # Create a separate eval environment
-        env = make_env(
-            env_name=self.env_name,
-            time_scale=20.0,
-            no_graphics=True,
-            worker_id=self.worker_id,
-        )
+        # Create a separate eval environment (with retry for transient Unity spawn failures)
+        env = None
+        for attempt in range(3):
+            try:
+                env = make_env(
+                    env_name=self.env_name,
+                    time_scale=20.0,
+                    no_graphics=True,
+                    worker_id=self.worker_id,
+                )
+                break
+            except Exception as e:
+                if attempt < 2:
+                    if self.verbose:
+                        print(f"[Eval] Unity spawn failed (attempt {attempt+1}/3): {e}. Retrying in 5s...")
+                    import time
+                    time.sleep(5)
+                else:
+                    if self.verbose:
+                        print(f"[Eval] Unity spawn failed after 3 attempts. Skipping eval at step {self.num_timesteps}.")
+                    return
 
         eval_model = PPO.load(tmp_path)
 
@@ -275,7 +295,8 @@ class WinRateStoppingCallback(BaseCallback):
         infos = self.locals.get("infos", [])
         for info in infos:
             if "episode" in info:
-                self.episode_outcomes.append(1 if info["episode"]["r"] > 0 else 0)
+                r = info["episode"]["r"]
+                self.episode_outcomes.append(1 if r > 0 else (0 if r < 0 else 0.5))
 
         if len(self.episode_outcomes) >= self.min_episodes:
             recent = self.episode_outcomes[-self.rolling_window:]

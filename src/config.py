@@ -23,6 +23,7 @@ Action Space: Discrete MultiDiscrete([3, 3])
   - Two movement axes, 3 choices each (left/none/right, forward/none/back)
   - Both branches have 3 options → 9 possible actions total
 """
+import copy
 
 # Base config shared across all environments
 BASE_CONFIG = {
@@ -71,12 +72,27 @@ ENV_CONFIGS = {
 
 def get_config(env_name: str) -> dict:
     """Get the full config for an environment, merging base + overrides."""
-    config = BASE_CONFIG.copy()
-    config["policy_kwargs"] = BASE_CONFIG["policy_kwargs"].copy()
+    config = copy.deepcopy(BASE_CONFIG)
     if env_name in ENV_CONFIGS:
         overrides = ENV_CONFIGS[env_name]
         config.update(overrides)
     return config
+
+
+def make_lr_schedule(config: dict):
+    """Convert lr_schedule config string into a learning rate value or callable.
+
+    If config has lr_schedule='linear_decay', returns a callable that linearly
+    decays from the configured learning_rate to 0. Otherwise returns the float.
+    """
+    lr = config.get("learning_rate", 3e-4)
+    schedule = config.get("lr_schedule", "constant")
+    if schedule == "linear_decay":
+        return lambda progress_remaining: lr * progress_remaining
+    elif schedule == "constant":
+        return lr
+    else:
+        raise ValueError(f"Unknown lr_schedule: {schedule!r}. Use 'constant' or 'linear_decay'.")
 
 
 def get_ppo_kwargs(config: dict) -> dict:
@@ -86,4 +102,6 @@ def get_ppo_kwargs(config: dict) -> dict:
         "gamma", "gae_lambda", "clip_range", "ent_coef",
         "vf_coef", "max_grad_norm", "policy_kwargs", "device",
     ]
-    return {k: config[k] for k in ppo_keys if k in config}
+    kwargs = {k: config[k] for k in ppo_keys if k in config}
+    kwargs["learning_rate"] = make_lr_schedule(config)
+    return kwargs

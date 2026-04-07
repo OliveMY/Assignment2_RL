@@ -16,6 +16,7 @@ import sys
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.utils import set_random_seed
 
 from config import get_config, get_ppo_kwargs
 from env_wrapper import make_env, make_vec_env
@@ -26,6 +27,11 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def train(args):
     config = get_config(args.env)
+
+    # Set random seed for reproducibility
+    if args.seed is not None:
+        set_random_seed(args.seed)
+        print(f"Random seed set to {args.seed}")
 
     # CLI overrides
     if args.timesteps:
@@ -153,6 +159,8 @@ def main():
                         help="Override learning rate")
     parser.add_argument("--resume", type=str, default=None,
                         help="Path to checkpoint to resume from")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Random seed for reproducibility")
     parser.add_argument("--worker-id", type=int, default=0,
                         help="Unity worker ID (use different IDs for parallel training)")
     parser.add_argument("--n-envs", type=int, default=1,

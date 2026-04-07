@@ -193,14 +193,28 @@ class UnityGymnasiumWrapper(gym.Env):
 
 
 def make_env(env_name: str, time_scale: float = 20.0, no_graphics: bool = True,
-             worker_id: int = 0) -> UnityGymnasiumWrapper:
-    """Factory function for creating wrapped Unity environments."""
-    return UnityGymnasiumWrapper(
+             worker_id: int = 0, norm_path: str = None) -> UnityGymnasiumWrapper:
+    """Factory function for creating wrapped Unity environments.
+
+    Args:
+        norm_path: If provided, wraps the environment in VecNormalize and loads
+            saved normalization stats from this path. Use for evaluating models
+            that were trained with observation normalization.
+    """
+    env = UnityGymnasiumWrapper(
         env_name=env_name,
         time_scale=time_scale,
         no_graphics=no_graphics,
         worker_id=worker_id,
     )
+    if norm_path is not None:
+        from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+        vec_env = DummyVecEnv([lambda: env])
+        vec_env = VecNormalize.load(norm_path, vec_env)
+        vec_env.training = False
+        vec_env.norm_reward = False
+        return vec_env
+    return env
 
 
 def make_vec_env(env_name: str, n_envs: int = 4, time_scale: float = 20.0,
