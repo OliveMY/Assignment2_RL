@@ -78,6 +78,14 @@ ABLATIONS = {
         ],
         "diagnostics": False,
     },
+    "reward_shaping": {
+        "values": ["none", "pbrs_proximity", "dense_contact", "dense_alive", "composite"],
+        "diagnostics": False,
+    },
+    "shaping_scale": {
+        "values": [0.01, 0.05, 0.1, 0.2, 0.5],
+        "diagnostics": False,
+    },
 }
 
 # Default timesteps per environment for ablation runs
@@ -101,17 +109,29 @@ def run_label(param_name, value):
 
 
 def run_single_ablation(env_name, param_name, value, seed, timesteps,
-                        worker_id, use_diagnostics, skip_eval):
+                        worker_id, use_diagnostics, skip_eval,
+                        baseline_overrides=None):
     """Train one PPO run with a single parameter override. Returns summary dict."""
     config = get_config(env_name)
 
-    # Apply the override
+    # Apply baseline overrides (e.g., lr, batch_size, lr_schedule)
+    if baseline_overrides:
+        config.update(baseline_overrides)
+
+    # Apply the ablation override
     if param_name == "net_arch":
         config["policy_kwargs"] = {
             "net_arch": dict(pi=list(value), vf=list(value)),
         }
     elif param_name == "lr_schedule":
         config["lr_schedule"] = value
+    elif param_name in ("reward_shaping", "shaping_scale"):
+        config[param_name] = value
+        # For shaping_scale ablation, use pbrs_proximity as the default strategy
+        if param_name == "shaping_scale":
+            config["reward_shaping"] = config.get("reward_shaping", "pbrs_proximity")
+            if config["reward_shaping"] == "none":
+                config["reward_shaping"] = "pbrs_proximity"
     else:
         config[param_name] = value
 
@@ -139,9 +159,21 @@ def run_single_ablation(env_name, param_name, value, seed, timesteps,
     if seed is not None:
         set_random_seed(seed)
 
+    # Build reward shaping config
+    shaping_strategy = config.pop("reward_shaping", "none")
+    shaping_scale = config.pop("shaping_scale", 0.1)
+    reward_shaping_config = None
+    if shaping_strategy != "none":
+        reward_shaping_config = {
+            "strategy": shaping_strategy,
+            "shaping_scale": shaping_scale,
+            "gamma": config.get("gamma", 0.99),
+        }
+
     # Create environment
     env = make_env(env_name, time_scale=time_scale,
-                   no_graphics=no_graphics, worker_id=worker_id)
+                   no_graphics=no_graphics, worker_id=worker_id,
+                   reward_shaping_config=reward_shaping_config)
     env = Monitor(env)
 
     # Create model
@@ -213,7 +245,8 @@ def run_single_ablation(env_name, param_name, value, seed, timesteps,
 
 
 def run_ablation_phase(param_name, env_name, seeds, timesteps, worker_id_base,
-                       values=None, skip_eval=True, dry_run=False):
+                       values=None, skip_eval=True, dry_run=False,
+                       baseline_overrides=None):
     """Run all values for one parameter ablation."""
     if param_name not in ABLATIONS:
         print(f"Unknown ablation parameter: {param_name}")
@@ -234,6 +267,8 @@ def run_ablation_phase(param_name, env_name, seeds, timesteps, worker_id_base,
     print(f"  Runs: {total_runs} ({len(test_values)} values x {len(seeds)} seeds)")
     print(f"  Timesteps per run: {ts:,}")
     print(f"  Diagnostics: {'Yes' if use_diagnostics else 'No'}")
+    if baseline_overrides:
+        print(f"  Baseline overrides: {baseline_overrides}")
     print(f"{'='*60}")
 
     if dry_run:
@@ -271,6 +306,7 @@ def run_ablation_phase(param_name, env_name, seeds, timesteps, worker_id_base,
                     worker_id=wid,
                     use_diagnostics=use_diagnostics,
                     skip_eval=skip_eval,
+                    baseline_overrides=baseline_overrides,
                 )
                 all_results.append(summary)
 
@@ -335,6 +371,15 @@ def main():
                         help="Override timesteps per run")
     parser.add_argument("--worker-id", type=int, default=10,
                         help="Base worker ID (default: 10)")
+    parser.add_argument("--lr", type=float, default=None,
+                        help="Override baseline learning rate")
+    parser.add_argument("--lr-schedule", type=str, default=None,
+                        choices=["constant", "linear_decay"],
+                        help="Override baseline LR schedule")
+    parser.add_argument("--batch-size", type=int, default=None,
+                        help="Override baseline batch size")
+    parser.add_argument("--ent-coef", type=float, default=None,
+                        help="Override baseline entropy coefficient")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print configurations without running")
     parser.add_argument("--list", action="store_true",
@@ -360,7 +405,7 @@ def main():
         sample = param_def.get("values", [None])[0] if param_def else None
         if isinstance(sample, float) or args.param in ("clip_range", "gae_lambda",
                                                         "ent_coef", "learning_rate",
-                                                        "gamma"):
+                                                        "gamma", "shaping_scale"):
             values = [float(v) for v in args.values]
         elif isinstance(sample, int) or args.param in ("n_epochs", "batch_size", "n_steps"):
             values = [int(v) for v in args.values]
@@ -368,7 +413,18 @@ def main():
             # Parse "64x64" format
             values = [[int(x) for x in v.split("x")] for v in args.values]
         else:
-            values = args.values  # strings (e.g., lr_schedule)
+            values = args.values  # strings (e.g., lr_schedule, reward_shaping)
+
+    # Build baseline overrides from CLI flags
+    baseline_overrides = {}
+    if args.lr is not None:
+        baseline_overrides["learning_rate"] = args.lr
+    if args.lr_schedule is not None:
+        baseline_overrides["lr_schedule"] = args.lr_schedule
+    if args.batch_size is not None:
+        baseline_overrides["batch_size"] = args.batch_size
+    if args.ent_coef is not None:
+        baseline_overrides["ent_coef"] = args.ent_coef
 
     run_ablation_phase(
         param_name=args.param,
@@ -378,6 +434,7 @@ def main():
         worker_id_base=args.worker_id,
         values=values,
         dry_run=args.dry_run,
+        baseline_overrides=baseline_overrides or None,
     )
 
 

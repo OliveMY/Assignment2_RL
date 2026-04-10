@@ -1,0 +1,395 @@
+# Experiment Registry — PPO on Unity Ball Games (CE6127 Assignment 2)
+#
+# This file maps each training run to its metadata and human annotations.
+# The script reads TensorBoard event files from results/{env}/{run}/ for metrics.
+#
+# Usage:
+#   python src/document_experiments.py              # Generate EXPERIMENTS.md
+#   python src/document_experiments.py --add         # Add new experiment interactively
+#
+# Required fields per experiment: id, run, env
+# All other fields are optional but recommended for a complete report.
+
+base_config:
+  learning_rate: 3e-4
+  n_steps: 2048
+  batch_size: 64
+  n_epochs: 10
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.02
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  net_arch: [128, 128]
+  total_timesteps: 4000000
+  n_envs: 1
+
+experiments:
+  # ─── Hard Environment ───────────────────────────────────────────────
+  - id: hard_baseline
+    run: PPO_4
+    env: hard
+    description: "Baseline with default config (lr=3e-4 constant)"
+    config_overrides: {}
+    hypothesis: >
+      Default PPO config (lr=3e-4, ent=0.02, clip=0.2, net=[128,128])
+      should be able to learn to beat the Hard opponent given enough
+      training steps (4M).
+    findings: >
+      Reached 100% WR at ~2.2M steps. Dead zone of 0-260k steps with
+      0% win rate — agent cannot find any positive reward signal initially.
+      Fastest learning between 400k-800k (steepest slope). Diminishing
+      returns after 1.4M. Trained to 4M but last 1.8M steps were wasted
+      (no improvement after 2.2M). Early stopping callback was blind due
+      to env_wrapper episode tracking bug. PPO diagnostics show healthy
+      clip_fraction (17-23%), moderate approx_kl (0.012-0.025), and
+      steadily decreasing entropy (-2.19 to -1.03). Explained variance
+      improved from -1.6 to +0.4 but plateaued, suggesting the value
+      function could be better.
+    decision: >
+      Use as baseline for all subsequent experiments. Primary bottleneck
+      is the 260k dead zone and slow convergence after 1.4M. Try higher
+      learning rate to address both.
+    tags: [baseline]
+
+  - id: hard_high_lr
+    run: PPO_5
+    env: hard
+    description: "Higher constant LR (5e-4), single env"
+    baseline: hard_baseline
+    config_overrides:
+      learning_rate: 5e-4
+    hypothesis: >
+      Higher LR (5e-4 vs 3e-4) amplifies the weak gradient signal
+      during the dead zone, helping the agent escape the random policy
+      faster. Intended to use linear decay but lr_schedule CLI flag was
+      not implemented yet, so this ran as constant 5e-4.
+    findings: >
+      Confirmed faster early learning: first 10% WR at 197k (vs 328k
+      baseline), 50% WR at 459k (vs 983k baseline) — roughly 2x speedup
+      to every milestone. Hit 98% eval WR at 1.05M steps. However, the
+      constant high LR caused instability after 1M: WR dropped to 90%
+      at 1.18M. TensorBoard confirms learning_rate stayed at 0.0005
+      throughout (no decay was applied). Approx KL reached 0.024 by the
+      end — higher than baseline's 0.025 at 4x more steps, indicating
+      policy updates were too aggressive late in training. Training-time
+      WR (87%) was much lower than eval WR (98%), showing the policy
+      performs better deterministically than when sampling.
+    decision: >
+      Higher LR confirmed effective (2x speedup to any WR milestone).
+      But constant 5e-4 causes late-training instability. Two paths:
+      (1) add parallel envs for smoother gradients, or (2) actually
+      implement LR decay. Tried path (1) first.
+    tags: [learning_rate]
+
+  - id: hard_parallel
+    run: PPO_8
+    env: hard
+    description: "Higher constant LR (5e-4) + 32 parallel envs"
+    baseline: hard_baseline
+    config_overrides:
+      learning_rate: 5e-4
+      n_envs: 32
+    hypothesis: >
+      32 parallel environments provide more diverse experience per
+      rollout, producing lower-variance gradient estimates. This should
+      stabilize the constant 5e-4 LR that caused instability in PPO_5.
+    findings: >
+      Reached 100% WR at 1.38M steps, stable 100% (3 consecutive) at
+      1.9M. 38% faster to first 100% than baseline (1.38M vs 2.23M).
+      Parallel envs DID reduce the instability — no drops below 90%
+      after 850k. However, still oscillated 90-100% from 1-1.7M before
+      stabilizing. TensorBoard confirms LR was constant 0.0005 (decay
+      still not applied despite intent). Approx KL climbed to 0.032,
+      and clip_fraction to 27% — both higher than baseline, confirming
+      the policy is still making oversized updates late in training.
+      The 32-env parallelism smoothed gradients enough to prevent
+      catastrophic drops but didn't eliminate oscillation.
+    decision: >
+      Parallel envs help stability but don't solve the root cause:
+      constant high LR makes late-training updates too aggressive.
+      Need to actually apply LR decay (fix the --lr-schedule CLI flag).
+      Entropy tuning is secondary — the LR issue dominates.
+    tags: [learning_rate, parallel]
+
+  - id: hard_low_entropy
+    run: PPO_9
+    env: hard
+    description: "Lower entropy (0.01) + constant LR 5e-4 + 32 envs"
+    baseline: hard_baseline
+    config_overrides:
+      learning_rate: 5e-4
+      ent_coef: 0.01
+      n_envs: 32
+    hypothesis: >
+      Halving entropy from 0.02 to 0.01 forces the policy to commit
+      to winning strategies sooner, reducing the 1-1.9M oscillation
+      phase. Lower entropy = less random exploration = more consistent
+      performance.
+    findings: >
+      Entropy change had minimal effect. First 100% WR at 1.51M (vs
+      1.38M for PPO_8 with ent=0.02) — actually slightly slower. Never
+      achieved 3 consecutive 100% evals — ran to 2.56M steps with WR
+      oscillating 96-100%. The lower entropy made the policy commit
+      faster (entropy_loss dropped to -1.0 vs -1.2 for PPO_8) but this
+      didn't translate to more stable wins. The real problem revealed
+      by diagnostics: approx_kl reached 0.036 and clip_fraction hit
+      27% — the highest of any run. The constant LR=5e-4 is the
+      dominant issue, not entropy. With aggressive policy updates late
+      in training, reducing exploration doesn't help because the policy
+      is being destabilized by gradient magnitude, not by sampling noise.
+    decision: >
+      Entropy tuning is not the bottleneck. The TensorBoard learning_rate
+      plot revealed that lr_schedule=linear_decay was never actually
+      applied in any run — the --lr CLI flag bypassed the schedule
+      mechanism. All "high LR" runs (PPO_5, 8, 9) used constant 5e-4.
+      Fixed the --lr-schedule CLI flag. Next experiment: actually apply
+      linear decay from 5e-4 to 0.
+    tags: [entropy, parallel, bug_discovery]
+
+  - id: hard_lr_decay
+    run: PPO_10
+    env: hard
+    description: "LR 5e-4 with actual linear decay + 32 envs"
+    baseline: hard_baseline
+    config_overrides:
+      learning_rate: 5e-4
+      lr_schedule: linear_decay
+      n_envs: 32
+    hypothesis: >
+      Previous "decay" runs (PPO_5, 8, 9) all used constant LR=5e-4 due to
+      a CLI bug. The high constant LR caused approx_kl to climb to 0.032-0.036
+      late in training, destabilizing the policy and causing 90-100% oscillation.
+      Actual linear decay (5e-4 down to 0) should keep early learning fast while
+      reducing late-training KL divergence, eliminating the oscillation.
+    findings: >
+      LR decay confirmed working (TensorBoard shows 4.89e-4 at 131k, decaying to
+      1.94e-4 at 1.9M). The diagnostic improvement is dramatic: late-training
+      approx_kl dropped to 0.015 (vs 0.032 in PPO_8 constant), clip_fraction
+      dropped to 0.17 (vs 0.27 in PPO_8). The policy makes appropriately-sized
+      updates throughout training instead of overshooting late. Reached first 100%
+      WR at 1.38M (same as PPO_8), but the path there is smoother — WR climbed
+      monotonically from 0.62 at 524k to 0.98 at 1.25M with no drops below 78%.
+      PPO_8 by contrast had a drop from 0.98 to 0.90 at 1.18M. Eval-based early
+      stopping triggered at 1.9M (3 consecutive 100% at steps 1.38M, 1.7M, 1.9M).
+      However, the 3 consecutive 100% took until 1.9M because of two 96-98% dips
+      at 1.44M and 1.51M. The explained_variance is the best of any run, reaching
+      0.49 (vs 0.40-0.48 for others), suggesting the value function benefits from
+      the more stable gradient signal.
+    decision: >
+      LR decay is a clear improvement over constant LR. The late-training
+      diagnostics (KL=0.015, clip=0.17) are back to healthy baseline levels
+      while keeping the 2x early speedup. The remaining bottleneck is the
+      1.38-1.9M window where the agent oscillates 96-100%. This is likely
+      inherent eval variance (50 episodes, 1-2 losses = 96-98%). Options for
+      further improvement: (1) increase eval episodes for more stable measurement,
+      (2) try larger batch size to smooth final convergence,
+      (3) try clip_range=0.15 to further tighten policy updates in late training.
+    tags: [learning_rate, decay, parallel]
+
+  - id: hard_large_batch
+    run: PPO_11
+    env: hard
+    description: "Larger batch size (256) + LR decay + 32 envs"
+    baseline: hard_baseline
+    config_overrides:
+      learning_rate: 5e-4
+      lr_schedule: linear_decay
+      batch_size: 256
+      n_envs: 32
+    hypothesis: >
+      Increasing batch_size from 64 to 256 reduces gradient variance. With
+      n_steps=2048 and 32 envs (65,536 timesteps per rollout), batch=256 means
+      256 smoother gradient updates per epoch instead of 1,024 noisier ones.
+      This should tighten the 96-100% oscillation window in the final phase.
+    findings: >
+      Reached first 100% WR at 1.31M — the fastest of any run. The climb is
+      noticeably smoother: no WR drop below the previous eval at any point
+      (monotonic from 24% at 262k to 100% at 1.31M). The diagnostics confirm
+      why: clip_fraction is the lowest of any 5e-4 LR run (0.17 → 0.15, vs
+      0.18 → 0.17 for PPO_10), and approx_kl peaked at just 0.013 (vs 0.019
+      for PPO_10). The larger batch produces cleaner gradient estimates that
+      don't overshoot. However, only had 1 eval at 100% before training ended
+      at 1.31M (20 eval points total, run appears shorter). LR decayed from
+      4.89e-4 to 2.92e-4 by end.
+    decision: >
+      Batch_size=256 + LR decay is the best hyperparameter combo so far for
+      stability. The monotonic climb is ideal for reproducibility. Next: test
+      reward shaping to see if dense intermediate signals can accelerate the
+      early dead zone (0-200k) where the agent has no learning signal.
+    tags: [batch_size, decay, parallel]
+
+  - id: hard_reward_shaping
+    run: PPO_12
+    env: hard
+    description: "PBRS proximity reward shaping + LR decay + 32 envs"
+    baseline: hard_baseline
+    config_overrides:
+      learning_rate: 5e-4
+      lr_schedule: linear_decay
+      n_envs: 32
+      reward_shaping: pbrs_proximity
+      shaping_scale: 0.1
+    hypothesis: >
+      The sparse Unity reward (+1/-1 on game end, -0.001/step) leaves the
+      agent with no gradient signal for the first 200k steps. PBRS proximity
+      shaping adds a potential-based bonus for closing distance to the opponent
+      (Ng 1999 guarantees this preserves the optimal policy). This should
+      eliminate the dead zone by providing immediate learning signal from
+      step 1.
+    findings: >
+      The dead zone was partially reduced — first non-zero WR at 131k (2% WR)
+      vs 196k for PPO_10 (4% WR). However, the early learning was actually
+      SLOWER overall: 50% WR at ~524k vs 393k for PPO_10. The shaping reward
+      (tracked via rollout/shaping_ep_reward) averaged 0.12-0.23 throughout
+      training — small relative to the +1/-1 game outcome. The agent may have
+      partially optimized for the shaping signal (approaching the opponent)
+      rather than the true objective (pushing opponent off). Diagnostics show
+      healthy KL (0.011-0.016) and clip_fraction (0.17-0.19), but explained
+      variance started worse (-1.82 vs -1.60) suggesting the value function
+      had to learn a more complex reward landscape. Reached 100% WR at 1.57M,
+      never achieved 3 consecutive 100% by end of run at 1.84M — still
+      oscillating 96-100%.
+    decision: >
+      PBRS proximity shaping did not improve convergence speed and may have
+      slightly hurt it. The sparse reward (+1/-1) is actually sufficient once
+      the higher LR kicks in — the dead zone is already short (~200k) with
+      lr=5e-4. Shaping adds complexity to the reward landscape without
+      meaningful benefit. The best Hard config remains: lr=5e-4 with linear
+      decay, batch_size=256, 32 envs, no reward shaping. Transfer this to
+      Simple and Medium.
+    tags: [reward_shaping, decay, parallel]
+
+  - id: hard_dense_contact
+    run: PPO_13
+    env: hard
+    description: "Dense contact shaping + batch=256 + LR decay + 32 envs"
+    baseline: hard_baseline
+    config_overrides:
+      learning_rate: 5e-4
+      lr_schedule: linear_decay
+      batch_size: 256
+      n_envs: 32
+      reward_shaping: dense_contact
+      shaping_scale: 0.1
+    hypothesis: >
+      Dense contact shaping gives a small bonus (0.05 * scale) whenever the
+      agent is within contact_radius (0.5) of the opponent. Unlike PBRS
+      proximity (PPO_12) which rewards closing distance, dense contact only
+      rewards being close — encouraging the agent to engage and stay near
+      the opponent rather than just approaching. This may produce a more
+      aggressive pushing strategy.
+    findings: >
+      Dense contact shaping produced even smaller shaping rewards than PBRS
+      proximity — mean 0.018 per episode (vs 0.185 for PPO_12 PBRS). The
+      contact bonus only fires when within radius 0.5, so most of the episode
+      the agent gets zero shaping signal. Convergence was slower and noisier
+      than PPO_11 (no shaping): first 100% WR at 1.38M (vs 1.31M for PPO_11),
+      with WR drops at 262k (22%→6%) and 1.05M (92%→82%) that PPO_11 didn't
+      have. The convergence path oscillated more: 46% at 655k, up to 92% at
+      983k, back to 82% at 1.05M. Diagnostics are healthy — approx_kl at
+      0.013 and clip_fraction at 0.15, matching PPO_11. But the value function
+      started worse (explained_variance -1.57 vs -0.57 for PPO_11 at the same
+      step), suggesting the intermittent contact bonus added noise to the
+      reward signal that confused early value estimation. Stopped at 1.51M
+      with 2 evals at 100% but one 98% in between.
+    decision: >
+      Dense contact shaping is worse than no shaping — same conclusion as
+      PBRS proximity (PPO_12). The contact bonus is too sparse (only fires
+      within radius 0.5) and too small to meaningfully guide learning. Both
+      shaping strategies tested (PBRS proximity, dense contact) add noise
+      to training without accelerating convergence. The best Hard config
+      remains PPO_11: lr=5e-4 decay, batch=256, 32 envs, no reward shaping.
+    tags: [reward_shaping, batch_size, decay, parallel]
+
+  - id: hard_dense_alive
+    run: PPO_14
+    env: hard
+    description: "Dense alive shaping + batch=256 + LR decay + 32 envs"
+    baseline: hard_baseline
+    config_overrides:
+      learning_rate: 5e-4
+      lr_schedule: linear_decay
+      batch_size: 256
+      n_envs: 32
+      reward_shaping: dense_alive
+      shaping_scale: 0.1
+    hypothesis: >
+      Dense alive shaping gives a tiny per-step bonus (0.001 * scale = 0.0001)
+      for staying on the platform. Unlike proximity and contact shaping which
+      encourage approaching the opponent, alive shaping rewards survival. This
+      could help the agent learn to stay on the platform first before learning
+      offensive strategy.
+    findings: >
+      The shaping reward was negligible — mean 0.0018 per episode, the smallest
+      of any strategy (vs 0.185 for PBRS proximity PPO_12, 0.018 for dense
+      contact PPO_13). The per-step bonus of 0.0001 is dwarfed by the +1/-1
+      game outcome. Convergence was the slowest of all optimized runs: first
+      100% WR at 1.84M steps (vs 1.31M for PPO_11 no shaping). The 1M-1.8M
+      range showed persistent oscillation between 94-98%, with a drop from
+      96% at 983k to 84% at 1.05M. Took until 2.1M for 3 consecutive 100%
+      evals. Diagnostics looked deceptively "healthy": approx_kl dropped to
+      0.011 and clip_fraction to 0.11 — but this just means the policy was
+      updating very conservatively, not that it was better. The alive bonus
+      may have discouraged risk-taking: pushing the opponent off the edge
+      requires approaching the edge yourself, which conflicts with a survival
+      incentive.
+    decision: >
+      Dense alive is the worst shaping strategy — it actively conflicts with
+      the offensive objective. All three strategies tested: PBRS proximity
+      (PPO_12, slower), dense contact (PPO_13, noisier), dense alive (PPO_14,
+      slowest and most conservative). None outperform no shaping (PPO_11).
+      The sparse +1/-1 reward is sufficient for this environment. Best Hard
+      config confirmed: lr=5e-4 decay, batch=256, 32 envs, no shaping.
+    tags: [reward_shaping, batch_size, decay, parallel]
+
+  - id: hard_best_rerun
+    run: PPO_15
+    env: hard
+    description: "Best config rerun with per-experiment checkpoints"
+    baseline: hard_baseline
+    config_overrides:
+      learning_rate: 5e-4
+      lr_schedule: linear_decay
+      batch_size: 256
+      n_envs: 32
+    hypothesis: >
+      Reproduce PPO_11's best config (lr=5e-4 decay, batch=256, 32 envs, no
+      shaping) with per-experiment checkpoint saving to preserve the trained
+      model. PPO_11's checkpoints were overwritten by subsequent runs.
+    findings: >
+      Successfully reproduced PPO_11's results. Reached 100% WR at 1.31M
+      steps — matching PPO_11 exactly. The training curve is nearly identical:
+      monotonic climb from 24% at 262k to 100% at 1.31M with no drops.
+      Diagnostics match PPO_11: clip_fraction 0.17→0.15, approx_kl steady at
+      0.013, explained_variance reaching 0.46. LR correctly decayed from
+      4.89e-4 to 2.92e-4. However, per-experiment checkpoint saving only
+      captured final.zip — intermediate checkpoints were not saved due to
+      save_freq not accounting for n_envs=32 (fixed for future runs).
+    decision: >
+      Confirms PPO_11 result is reproducible. Checkpoint saving now fixed
+      (save_freq adjusted for n_envs). Need to rerun once more to get
+      intermediate checkpoints, or use final.zip as the demo model.
+    tags: [best, checkpoint, decay, parallel]
+
+  # ─── Medium Environment ─────────────────────────────────────────────
+  - id: medium_baseline
+    run: PPO_1
+    env: medium
+    description: "Baseline for Medium environment"
+    config_overrides:
+      ent_coef: 0.015
+      total_timesteps: 1000000
+    hypothesis: >
+      Medium opponent should be easier than Hard. Lower entropy (0.015)
+      and fewer timesteps (1M) should suffice.
+    findings: >
+      Reached 96% WR (48W/2L) at 1M steps. Learning started faster than
+      Hard (34% WR by 200k vs 0% for Hard baseline). Never reached 100%.
+      Episode log was empty (pre env_wrapper fix). Only 1M steps may not
+      have been enough — config.py specifies 2M for medium.
+    decision: >
+      Extend training to 2M steps. Consider applying the higher LR finding
+      from Hard experiments to speed up convergence.
+    tags: [baseline]

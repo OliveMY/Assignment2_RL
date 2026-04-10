@@ -97,6 +97,8 @@ class UnityGymnasiumWrapper(gym.Env):
             self._action_type = "continuous"
 
         self._agent_id = None
+        self._episode_reward = 0.0
+        self._episode_length = 0
 
     def _get_obs(self, steps, agent_idx: int) -> np.ndarray:
         """Concatenate all observation tensors for a single agent."""
@@ -118,9 +120,15 @@ class UnityGymnasiumWrapper(gym.Env):
                 discrete = np.array(action, dtype=np.int32).reshape(1, -1)
             return ActionTuple(discrete=discrete)
 
+    def _make_episode_info(self):
+        """Build the episode info dict that SB3's Monitor/callbacks expect."""
+        return {"episode": {"r": self._episode_reward, "l": self._episode_length}}
+
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self._unity_env.reset()
+        self._episode_reward = 0.0
+        self._episode_length = 0
 
         # Get first decision step
         decision_steps, terminal_steps = self._unity_env.get_steps(self._behavior_name)
@@ -145,7 +153,6 @@ class UnityGymnasiumWrapper(gym.Env):
 
         # Check if episode terminated
         if len(terminal_steps) > 0:
-            # Find our agent in terminal steps
             agent_idx = None
             for i, aid in enumerate(terminal_steps.agent_id):
                 if aid == self._agent_id:
@@ -155,7 +162,10 @@ class UnityGymnasiumWrapper(gym.Env):
             if agent_idx is not None:
                 obs = self._get_obs(terminal_steps, agent_idx)
                 reward = float(terminal_steps.reward[agent_idx])
-                return obs, reward, True, False, {}
+                self._episode_reward += reward
+                self._episode_length += 1
+                info = self._make_episode_info()
+                return obs, reward, True, False, info
 
         # Check if our agent needs a new decision
         if len(decision_steps) > 0:
@@ -168,22 +178,30 @@ class UnityGymnasiumWrapper(gym.Env):
             if agent_idx is not None:
                 obs = self._get_obs(decision_steps, agent_idx)
                 reward = float(decision_steps.reward[agent_idx])
+                self._episode_reward += reward
+                self._episode_length += 1
                 return obs, reward, False, False, {}
 
-        # Agent not found in either — environment may have auto-reset
-        # Try to get new agent
+        # Agent not found in either — Unity auto-reset consumed the terminal step.
+        # The previous episode ended but we missed it. Treat as termination.
+        ep_info = self._make_episode_info()
+
+        # Wait for the new agent from the next episode
         while len(decision_steps) == 0:
             self._unity_env.step()
             decision_steps, terminal_steps = self._unity_env.get_steps(self._behavior_name)
             if len(terminal_steps) > 0:
                 obs = self._get_obs(terminal_steps, 0)
                 reward = float(terminal_steps.reward[0])
-                return obs, reward, True, False, {}
+                return obs, reward, True, False, ep_info
 
+        # New episode started — return terminal for the OLD episode
         self._agent_id = decision_steps.agent_id[0]
         obs = self._get_obs(decision_steps, 0)
-        reward = float(decision_steps.reward[0])
-        return obs, reward, False, False, {}
+        # Reset counters for the new episode
+        self._episode_reward = 0.0
+        self._episode_length = 0
+        return obs, 0.0, True, False, ep_info
 
     def close(self):
         self._unity_env.close()
@@ -193,13 +211,16 @@ class UnityGymnasiumWrapper(gym.Env):
 
 
 def make_env(env_name: str, time_scale: float = 20.0, no_graphics: bool = True,
-             worker_id: int = 0, norm_path: str = None) -> UnityGymnasiumWrapper:
+             worker_id: int = 0, norm_path: str = None,
+             reward_shaping_config: dict = None) -> UnityGymnasiumWrapper:
     """Factory function for creating wrapped Unity environments.
 
     Args:
         norm_path: If provided, wraps the environment in VecNormalize and loads
             saved normalization stats from this path. Use for evaluating models
             that were trained with observation normalization.
+        reward_shaping_config: If provided, wraps with RewardShapingWrapper.
+            Dict is passed as kwargs, e.g. {"strategy": "pbrs_proximity", "shaping_scale": 0.1}.
     """
     env = UnityGymnasiumWrapper(
         env_name=env_name,
@@ -207,6 +228,9 @@ def make_env(env_name: str, time_scale: float = 20.0, no_graphics: bool = True,
         no_graphics=no_graphics,
         worker_id=worker_id,
     )
+    if reward_shaping_config and reward_shaping_config.get("strategy", "none") != "none":
+        from reward_shaping import RewardShapingWrapper
+        env = RewardShapingWrapper(env, **reward_shaping_config)
     if norm_path is not None:
         from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
         vec_env = DummyVecEnv([lambda: env])
@@ -218,7 +242,8 @@ def make_env(env_name: str, time_scale: float = 20.0, no_graphics: bool = True,
 
 
 def make_vec_env(env_name: str, n_envs: int = 4, time_scale: float = 20.0,
-                 no_graphics: bool = True, base_worker_id: int = 0):
+                 no_graphics: bool = True, base_worker_id: int = 0,
+                 reward_shaping_config: dict = None):
     """Create a SubprocVecEnv with n_envs parallel Unity environments.
 
     Each sub-environment gets a unique worker_id (base_worker_id + i)
@@ -234,6 +259,9 @@ def make_vec_env(env_name: str, n_envs: int = 4, time_scale: float = 20.0,
                 no_graphics=no_graphics,
                 worker_id=wid,
             )
+            if reward_shaping_config and reward_shaping_config.get("strategy", "none") != "none":
+                from reward_shaping import RewardShapingWrapper
+                return RewardShapingWrapper(env, **reward_shaping_config)
             return env
         return _init
 

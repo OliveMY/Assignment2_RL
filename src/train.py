@@ -21,6 +21,7 @@ from stable_baselines3.common.utils import set_random_seed
 from config import get_config, get_ppo_kwargs
 from env_wrapper import make_env, make_vec_env
 from callbacks import TrainingLogCallback, WinRateStoppingCallback, EvalCallback
+from diagnostics_callback import DiagnosticsCallback
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -40,16 +41,48 @@ def train(args):
         config["time_scale"] = args.time_scale
     if args.lr:
         config["learning_rate"] = args.lr
+    if args.ent_coef is not None:
+        config["ent_coef"] = args.ent_coef
+    if args.lr_schedule:
+        config["lr_schedule"] = args.lr_schedule
+    if args.batch_size:
+        config["batch_size"] = args.batch_size
+    if args.reward_shaping:
+        config["reward_shaping"] = args.reward_shaping
+    if args.shaping_scale is not None:
+        config["shaping_scale"] = args.shaping_scale
 
     total_timesteps = config.pop("total_timesteps")
     time_scale = config.pop("time_scale", 20.0)
     no_graphics = config.pop("no_graphics", True)
     config["total_timesteps"] = total_timesteps  # keep for callback logging
 
-    model_dir = os.path.join(BASE_DIR, "models", args.env)
     log_dir = os.path.join(BASE_DIR, "results", args.env)
-    os.makedirs(model_dir, exist_ok=True)
     os.makedirs(log_dir, exist_ok=True)
+
+    # Determine the next PPO_N run number (matches TensorBoard's auto-naming)
+    existing_runs = [d for d in os.listdir(log_dir)
+                     if d.startswith("PPO_") and os.path.isdir(os.path.join(log_dir, d))]
+    run_numbers = [int(d.split("_")[1]) for d in existing_runs if d.split("_")[1].isdigit()]
+    next_run = max(run_numbers, default=0) + 1
+    run_name = f"PPO_{next_run}"
+
+    # Save checkpoints per-experiment so runs don't overwrite each other
+    model_dir = os.path.join(BASE_DIR, "models", args.env, run_name)
+    os.makedirs(model_dir, exist_ok=True)
+    print(f"Run: {run_name} | Checkpoints: {model_dir}")
+
+    # Build reward shaping config
+    shaping_strategy = config.pop("reward_shaping", "none")
+    shaping_scale = config.pop("shaping_scale", 0.1)
+    reward_shaping_config = None
+    if shaping_strategy != "none":
+        reward_shaping_config = {
+            "strategy": shaping_strategy,
+            "shaping_scale": shaping_scale,
+            "gamma": config.get("gamma", 0.99),
+        }
+        print(f"Reward shaping: {shaping_strategy} (scale={shaping_scale})")
 
     # Create environment
     n_envs = args.n_envs
@@ -61,6 +94,7 @@ def train(args):
             time_scale=time_scale,
             no_graphics=no_graphics,
             base_worker_id=args.worker_id,
+            reward_shaping_config=reward_shaping_config,
         )
     else:
         print(f"Creating {args.env} environment (time_scale={time_scale})...")
@@ -69,6 +103,7 @@ def train(args):
             time_scale=time_scale,
             no_graphics=no_graphics,
             worker_id=args.worker_id,
+            reward_shaping_config=reward_shaping_config,
         )
         env = Monitor(env)
 
@@ -100,9 +135,11 @@ def train(args):
           f"ent_coef={config['ent_coef']}, gamma={config['gamma']}")
 
     # Callbacks
+    # save_freq is in _on_step calls; with n_envs, each call = n_envs timesteps
+    checkpoint_freq = max(1, 50_000 // n_envs)
     callbacks = [
         CheckpointCallback(
-            save_freq=10_000,
+            save_freq=checkpoint_freq,
             save_path=model_dir,
             name_prefix="checkpoint",
             save_replay_buffer=False,
@@ -114,6 +151,10 @@ def train(args):
             env_name=args.env,
             print_freq=50,
         ),
+        DiagnosticsCallback(
+            log_dir=log_dir,
+            verbose=1,
+        ),
     ]
     if not args.skip_eval:
         callbacks.append(EvalCallback(
@@ -122,6 +163,7 @@ def train(args):
             n_eval_episodes=args.eval_episodes,
             log_dir=log_dir,
             worker_id=args.worker_id + 100,
+            stop_on_win_rate=args.stop_win_rate,
         ))
     if not args.no_early_stop:
         callbacks.append(WinRateStoppingCallback(
@@ -157,6 +199,13 @@ def main():
                         help="Unity time scale (default: 20.0)")
     parser.add_argument("--lr", type=float, default=None,
                         help="Override learning rate")
+    parser.add_argument("--ent-coef", type=float, default=None,
+                        help="Override entropy coefficient")
+    parser.add_argument("--lr-schedule", type=str, default=None,
+                        choices=["constant", "linear_decay"],
+                        help="Learning rate schedule (default: constant)")
+    parser.add_argument("--batch-size", type=int, default=None,
+                        help="Override minibatch size")
     parser.add_argument("--resume", type=str, default=None,
                         help="Path to checkpoint to resume from")
     parser.add_argument("--seed", type=int, default=None,
@@ -165,6 +214,12 @@ def main():
                         help="Unity worker ID (use different IDs for parallel training)")
     parser.add_argument("--n-envs", type=int, default=1,
                         help="Number of parallel Unity environments (default: 1)")
+    parser.add_argument("--reward-shaping", type=str, default=None,
+                        choices=["none", "pbrs_proximity", "dense_contact",
+                                 "dense_alive", "composite"],
+                        help="Reward shaping strategy (default: from config)")
+    parser.add_argument("--shaping-scale", type=float, default=None,
+                        help="Scale factor for shaping rewards (default: 0.1)")
     parser.add_argument("--no-early-stop", action="store_true",
                         help="Disable early stopping on win rate")
     parser.add_argument("--eval-freq", type=int, default=50_000,
@@ -173,6 +228,8 @@ def main():
                         help="Number of games per evaluation (default: 50)")
     parser.add_argument("--skip-eval", action="store_true",
                         help="Disable periodic evaluation")
+    parser.add_argument("--stop-win-rate", type=float, default=None,
+                        help="Stop training when eval win rate reaches this threshold for 3 consecutive evals")
     args = parser.parse_args()
     train(args)
 

@@ -89,6 +89,13 @@ class TrainingLogCallback(BaseCallback):
                 self.logger.record("rollout/ep_length", ep_length)
                 self.logger.record("rollout/win", 1 if ep_reward > 0 else 0)
 
+                # Log raw vs shaped rewards if reward shaping is active
+                if "raw_episode_reward" in info:
+                    raw_r = info["raw_episode_reward"]
+                    shaping_r = info["shaping_episode_reward"]
+                    self.logger.record("rollout/raw_ep_reward", raw_r)
+                    self.logger.record("rollout/shaping_ep_reward", shaping_r)
+
                 # Rolling win rate
                 if len(self.episode_outcomes) >= 10:
                     recent = self.episode_outcomes[-self.rolling_window:]
@@ -158,6 +165,8 @@ class EvalCallback(BaseCallback):
         log_dir: str = ".",
         worker_id: int = 100,
         verbose: int = 1,
+        stop_on_win_rate: float = None,
+        stop_consecutive: int = 3,
     ):
         super().__init__(verbose)
         self.env_name = env_name
@@ -166,12 +175,20 @@ class EvalCallback(BaseCallback):
         self.log_dir = log_dir
         self.worker_id = worker_id
         self._last_eval_step = 0
+        self.stop_on_win_rate = stop_on_win_rate
+        self.stop_consecutive = stop_consecutive
+        self._consecutive_above = 0
+        self._should_stop = False
 
     def _on_step(self):
+        if self._should_stop:
+            return False
         if self.num_timesteps - self._last_eval_step < self.eval_freq:
             return True
         self._last_eval_step = self.num_timesteps
         self._run_eval()
+        if self._should_stop:
+            return False
         return True
 
     def _run_eval(self):
@@ -273,6 +290,18 @@ class EvalCallback(BaseCallback):
                   f"({wins}W/{losses}L/{draws}D), "
                   f"Avg reward {avg_reward:+.3f}")
             print(f"[Eval] Results saved to {results_path}")
+
+        # Eval-based early stopping
+        if self.stop_on_win_rate is not None:
+            if win_rate >= self.stop_on_win_rate:
+                self._consecutive_above += 1
+                if self._consecutive_above >= self.stop_consecutive:
+                    if self.verbose:
+                        print(f"[Eval] Win rate >= {100*self.stop_on_win_rate:.0f}% "
+                              f"for {self.stop_consecutive} consecutive evals. Stopping.")
+                    self._should_stop = True
+            else:
+                self._consecutive_above = 0
 
 
 class WinRateStoppingCallback(BaseCallback):

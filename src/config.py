@@ -46,6 +46,9 @@ BASE_CONFIG = {
     # Environment
     "time_scale": 20.0,        # Unity time acceleration for training
     "no_graphics": True,       # Disable rendering during training
+    # Reward shaping (see reward_shaping.py for strategy details)
+    "reward_shaping": "none",  # "none", "pbrs_proximity", "dense_contact", "dense_alive", "composite"
+    "shaping_scale": 0.1,      # Global scale factor for shaping rewards
 }
 
 # Per-environment configs (override base)
