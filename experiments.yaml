@@ -373,6 +373,34 @@ experiments:
       intermediate checkpoints, or use final.zip as the demo model.
     tags: [best, checkpoint, decay, parallel]
 
+  - id: hard_best_final
+    run: PPO_16
+    env: hard
+    description: "Best config with proper checkpoint saving (every ~50K steps)"
+    baseline: hard_baseline
+    config_overrides:
+      learning_rate: 5e-4
+      lr_schedule: linear_decay
+      batch_size: 256
+      n_envs: 32
+    hypothesis: >
+      Same best config as PPO_11/PPO_15, rerun with fixed checkpoint saving
+      (save_freq adjusted for n_envs=32) to get intermediate checkpoints
+      every ~50K steps for the demo agent.
+    findings: >
+      Reproduced the best result for the third time — 100% WR at 1.31M steps.
+      Training curve identical to PPO_11 and PPO_15: monotonic climb from 24%
+      at 262k to 100% at 1.31M. Diagnostics match exactly: clip_fraction
+      0.17→0.15, approx_kl 0.012→0.013, explained_variance reaching 0.46.
+      28 intermediate checkpoints saved every ~50K steps in models/hard/PPO_16/,
+      plus final.zip. The result is highly reproducible across 3 runs (PPO_11,
+      PPO_15, PPO_16) with identical seed=0.
+    decision: >
+      PPO_16 is the definitive Hard demo agent. Use models/hard/PPO_16/final.zip
+      for evaluation and demo. Checkpoints available from 50K to 1.35M for
+      training curve visualization. Transfer this config to Simple and Medium.
+    tags: [best, checkpoint, decay, parallel, final]
+
   # ─── Medium Environment ─────────────────────────────────────────────
   - id: medium_baseline
     run: PPO_1
@@ -393,3 +421,60 @@ experiments:
       Extend training to 2M steps. Consider applying the higher LR finding
       from Hard experiments to speed up convergence.
     tags: [baseline]
+
+  - id: medium_optimized
+    run: PPO_2
+    env: medium
+    description: "Best config transferred from Hard (lr=5e-4 decay, batch=256, 32 envs)"
+    baseline: medium_baseline
+    config_overrides:
+      learning_rate: 5e-4
+      lr_schedule: linear_decay
+      batch_size: 256
+      n_envs: 32
+    hypothesis: >
+      Transfer the optimized Hard config (lr=5e-4 decay, batch=256, 32 envs)
+      to Medium. The Medium opponent is easier, so the agent should converge
+      faster than Hard and reach 100% WR (which the baseline never achieved).
+    findings: >
+      Successfully reached 100% WR at 917k steps — a major improvement over
+      the baseline which plateaued at 96% after 1M steps. The optimized config
+      solved Medium's convergence issue entirely. Learning was fast: 42% WR
+      by 262k, 94% by 721k, first 100% at 917k. Achieved 3 consecutive 100%
+      evals and early stopping triggered at 1.25M. The training curve had a
+      brief plateau at 60-62% from 458k-590k before breaking through to 94%
+      at 721k. LR decayed from 4.89e-4 to 3.03e-4. Diagnostics healthy:
+      clip_fraction decreased from 0.23 to 0.16, approx_kl stable at 0.013.
+      26 checkpoints saved in models/medium/PPO_2/.
+    decision: >
+      Medium solved with the Hard-optimized config. 100% WR at 917k vs
+      baseline's 96% at 1M. The config transfers well to easier environments.
+    tags: [transfer, best, decay, parallel, final]
+
+  # ─── Simple Environment ─────────────────────────────────────────────
+  - id: simple_optimized
+    run: PPO_1
+    env: simple
+    description: "Best config transferred from Hard (lr=5e-4 decay, batch=256, 32 envs)"
+    config_overrides:
+      learning_rate: 5e-4
+      lr_schedule: linear_decay
+      batch_size: 256
+      n_envs: 32
+    hypothesis: >
+      Transfer the optimized Hard config to Simple. The Simple opponent is
+      the easiest, so the agent should converge very quickly.
+    findings: >
+      Reached 100% WR at 262k steps — the fastest convergence of any
+      experiment. The Simple opponent was trivially solved: 0% WR through
+      196k (dead zone still exists but shorter), then jumped straight to
+      100% at 262k. Only 4 eval points total before early stopping triggered.
+      Training completed in minutes. LR barely decayed (4.89e-4 to 4.67e-4)
+      because the run was so short. Clip_fraction started high (0.30) and
+      dropped to 0.20 — the policy made large initial updates then stabilized.
+      7 checkpoints saved in models/simple/PPO_1/.
+    decision: >
+      Simple solved. All three environments now achieve 100% WR with the
+      same optimized config: lr=5e-4 decay, batch=256, 32 envs. Convergence
+      speed scales with difficulty: Simple 262k, Medium 917k, Hard 1.31M.
+    tags: [transfer, best, decay, parallel, final]
