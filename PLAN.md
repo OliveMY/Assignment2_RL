@@ -1,6 +1,20 @@
 # PPO Iteration Plan — Step-by-Step Guide
 
-This is your execution guide. Follow it phase by phase. Each phase has:
+> **Status:** Experiments complete. See [EXPERIMENTS.md](EXPERIMENTS.md) for the full results
+> of 14 experiments across all three environments.
+>
+> The actual experimental progression diverged from this plan: instead of
+> ablating each parameter individually on Simple and transferring, experiments
+> focused on iterative improvement on Hard (the most challenging environment)
+> and transferred the best config to Medium and Simple. Key findings:
+> - **LR 5e-4 with linear decay** eliminated late-training instability
+> - **32 parallel envs** smoothed gradients and stabilized training
+> - **Batch size 256** produced the smoothest convergence curve
+> - **Reward shaping** (all 3 strategies) hurt rather than helped
+> - **Phases 2, 3, 6, 8** were not run as separate ablations; the iterative
+>   approach on Hard covered learning rate, batch size, parallelism, and entropy
+
+This is the original execution guide. Each phase has:
 - The exact commands to run
 - What to look for in the results
 - What to write in your report
@@ -22,7 +36,9 @@ Deviations from SB3 defaults: `net_arch` is [128,128] (SB3 default is [64,64]), 
 
 ---
 
-## Phase 1: Establish Baseline
+## Phase 1: Establish Baseline ✓
+
+> **Done.** Hard baseline (PPO_4): 100% WR at 2.2M steps, 1.9h. Medium baseline (PPO_1): 96% WR at 1M steps. See EXPERIMENTS.md #1, #12.
 
 **Goal:** Get baseline win rates and diagnostics for all 3 environments.
 
@@ -70,7 +86,9 @@ Fill in this table from your runs:
 
 ---
 
-## Phase 2: Clip Range Ablation
+## Phase 2: Clip Range Ablation — Skipped
+
+> **Not run as separate ablation.** Clip range was kept at the default 0.2 throughout all experiments. The iterative approach focused on learning rate, parallelism, and batch size instead. Clip_fraction was tracked as a diagnostic metric across all 14 experiments — see EXPERIMENTS.md for trends.
 
 **Goal:** Understand PPO's core mechanism. This is the most important ablation.
 
@@ -113,7 +131,9 @@ python src/ablation.py --param clip_range --env hard \
 
 ---
 
-## Phase 3: GAE Lambda Ablation
+## Phase 3: GAE Lambda Ablation — Skipped
+
+> **Not run as separate ablation.** GAE lambda was kept at 0.95 throughout all experiments.
 
 **Goal:** Understand the bias-variance tradeoff in advantage estimation.
 
@@ -145,7 +165,9 @@ python src/plot_ablation.py --param gae_lambda --env simple
 
 ---
 
-## Phase 4: Entropy Coefficient Ablation
+## Phase 4: Entropy Coefficient Ablation ✓
+
+> **Partially done.** Tested ent_coef=0.01 vs baseline 0.02 in EXPERIMENTS.md #4 (hard_low_entropy). Finding: entropy tuning was not the bottleneck — the constant high LR dominated the instability. Kept ent_coef=0.02 for the optimized config.
 
 **Goal:** Find the exploration-exploitation sweet spot. Hunt for the "entropy cliff."
 
@@ -180,7 +202,9 @@ python src/plot_ablation.py --param ent_coef --env simple
 
 ---
 
-## Phase 5: Learning Rate
+## Phase 5: Learning Rate ✓
+
+> **Done.** Tested constant 5e-4 (#2), constant 5e-4 + parallel (#3), and 5e-4 with linear decay (#5). Key finding: constant high LR causes late-training KL divergence spikes (approx_kl up to 0.036); linear decay eliminates this while keeping the 2x early speedup. See EXPERIMENTS.md #2, #3, #5.
 
 **Goal:** Compare constant vs decaying learning rate.
 
@@ -216,7 +240,9 @@ python src/plot_ablation.py --param lr_schedule --env simple
 
 ---
 
-## Phase 6: Network Architecture
+## Phase 6: Network Architecture — Skipped
+
+> **Not run as separate ablation.** Network was kept at [128, 128] throughout all experiments. The 12-dimensional observation space did not warrant larger architectures.
 
 **Goal:** Right-size the network for the task.
 
@@ -246,7 +272,9 @@ python src/plot_ablation.py --param net_arch --env simple
 
 ---
 
-## Phase 7: Batch Size and N-Steps
+## Phase 7: Batch Size and N-Steps ✓
+
+> **Batch size done.** Tested batch_size=256 in EXPERIMENTS.md #6 (hard_large_batch). Produced the smoothest monotonic convergence curve and fastest first 100% WR (1.31M steps). N-steps was kept at 2048 throughout. See EXPERIMENTS.md #6.
 
 **Goal:** Understand the gradient quality vs speed tradeoff.
 
@@ -275,7 +303,9 @@ python src/plot_ablation.py --param n_steps   --env simple
 
 ---
 
-## Phase 8: Observation Normalization
+## Phase 8: Observation Normalization — Skipped
+
+> **Not implemented.** VecNormalize wrapper was not added. Positions are already normalized by arenaHalfSize in the Unity source. Velocities/angular velocities are raw but the agent learned effectively without normalization.
 
 **Goal:** See if normalizing observations gives a free boost.
 
@@ -302,7 +332,9 @@ python src/train.py --env simple --seed 0
 
 ---
 
-## Phase 9: N-Epochs and Gamma
+## Phase 9: N-Epochs and Gamma — Skipped
+
+> **Not run as separate ablations.** Both n_epochs=10 and gamma=0.99 were kept at defaults throughout. The iterative experiments focused on the parameters with the largest observed impact (LR, parallelism, batch size).
 
 **Goal:** Complete the PPO parameter coverage.
 
@@ -338,7 +370,9 @@ python src/plot_ablation.py --param gamma --env simple
 
 ---
 
-## Phase 10: Assembly + Transfer
+## Phase 10: Assembly + Transfer ✓
+
+> **Done.** Best config from Hard (lr=5e-4 decay, batch=256, 32 envs) transferred directly to Medium and Simple. All three reached 100% WR. Convergence scales with difficulty: Simple 262K, Medium 918K, Hard 1.31M. See EXPERIMENTS.md #13 (medium_optimized), #14 (simple_optimized).
 
 **Goal:** Combine the best values and test on all environments.
 
@@ -399,7 +433,9 @@ If the combined Simple win rate dropped >5% compared to individual ablation resu
 
 ---
 
-## Phase 11: Final Fine-Tuning
+## Phase 11: Final Fine-Tuning ✓
+
+> **Done.** No per-environment tuning was needed — the same optimized config worked across all three. Final models: models/hard/PPO_16/final.zip, models/medium/PPO_2/final.zip (or models/medium/final.zip), models/simple/PPO_1/final.zip (or models/simple/final.zip). ONNX exports available in models/onnx/.
 
 **Goal:** Produce the best agent for each environment.
 
@@ -435,19 +471,17 @@ python src/evaluate.py --env all --rounds 100
 
 Fill this in as you go. This becomes the capstone of your iteration document.
 
-| Iteration | Parameter | Best Value | Win Rate | vs Baseline | Key Insight |
-|-----------|-----------|------------|----------|-------------|-------------|
-| 0 | Baseline | — | % | — | Starting point |
-| 1 | clip_range | | % | +/- % | |
-| 2 | gae_lambda | | % | +/- % | |
-| 3 | ent_coef | | % | +/- % | |
-| 4 | learning_rate | | % | +/- % | |
-| 5 | net_arch | | % | +/- % | |
-| 6 | batch/n_steps | | % | +/- % | |
-| 7 | normalization | | % | +/- % | |
-| 8 | n_epochs + gamma | | % | +/- % | |
-| 9 | assembled config | | % | +/- % | |
-| 10 | final tuning | | % | +/- % | |
+| Iteration | Parameter | Best Value | Win Rate (Hard) | vs Baseline | Key Insight |
+|-----------|-----------|------------|-----------------|-------------|-------------|
+| 0 | Baseline | — | 100% at 2.2M | — | 260K dead zone, diminishing returns after 1.4M |
+| 1 | learning_rate | 5e-4 | 90% at 1M | 2x speedup | Constant high LR causes late instability |
+| 2 | n_envs | 32 | 100% at 1.4M | -38% steps | Smoothed gradients, prevented catastrophic drops |
+| 3 | ent_coef | 0.02 (no change) | 100% at 1.5M | minimal | Not the bottleneck; LR dominates |
+| 4 | lr_schedule | linear_decay | 100% at 1.4M | -38% steps | Late KL dropped from 0.032 to 0.015 |
+| 5 | batch_size | 256 | 100% at 1.3M | -41% steps | Monotonic convergence, smoothest curve |
+| 6-8 | reward_shaping | none (baseline) | 98-100% | worse | All 3 strategies hurt or added noise |
+| 9 | assembled config | all combined | 100% at 1.31M | -41% steps | Reproducible across 3 runs |
+| 10 | transfer | same config | 100% all envs | — | Simple 262K, Medium 918K, Hard 1.31M |
 
 ---
 
